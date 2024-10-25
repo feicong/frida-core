@@ -117,6 +117,7 @@ namespace Frida.Fruity {
 
 		private void on_transport_attached (Transport transport) {
 			unowned string udid = transport.udid;
+			printerr ("on_transport_attached() transport=%s udid=\"%s\"\n", transport.get_type ().name (), udid);
 
 			var device = devices[udid];
 			if (device == null) {
@@ -1353,8 +1354,11 @@ namespace Frida.Fruity {
 
 		public static async NcmPeer locate (UsbDevice usb_device, Cancellable? cancellable) throws Error, IOError {
 			var device_ifaddrs = detect_ncm_ifaddrs_on_system (usb_device);
-			if (device_ifaddrs.size == 2)
+			if (device_ifaddrs.size != 0) {
+				printerr ("Using kernel NCM\n");
 				return yield locate_on_system_netifs (device_ifaddrs, cancellable);
+			}
+			printerr ("Using userspace NCM\n");
 			return yield establish_using_our_driver (usb_device, cancellable);
 		}
 
