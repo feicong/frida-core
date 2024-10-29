@@ -2112,6 +2112,7 @@ namespace Frida.Fruity {
 			try {
 				InetSocketAddress remote_address;
 				size_t n = Udp.recv (rx_buf, socket.datagram_based, io_cancellable, out remote_address);
+				printerr ("Udp.recv() from [%s]:%u\n", remote_address.get_address ().to_string (), remote_address.get_port ());
 
 				uint8[] raw_remote_address = address_to_native (remote_address);
 
@@ -2123,7 +2124,8 @@ namespace Frida.Fruity {
 				unowned uint8[] data = rx_buf[:n];
 
 				var res = connection.read_packet (path, null, data, make_timestamp ());
-				printerr ("read_packet() => %d\n", res);
+				if (res != 0)
+					printerr ("\tread_packet() => %d\n", res);
 			} catch (GLib.Error e) {
 				return Source.REMOVE;
 			} finally {
