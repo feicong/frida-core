@@ -1893,8 +1893,12 @@ namespace Frida.Fruity {
 				scope_id: netstack.scope_id
 			));
 			socket.socket_connect (address, cancellable);
+			var local_addr = socket.get_local_address ();
+			printerr ("TunnelConnection.init_async() bound to [%s]:%u, pinned to remote address: [%s]:%u\n",
+				local_addr.get_address ().to_string (), local_addr.get_port (),
+				address.get_address ().to_string (), address.get_port ());
 
-			raw_local_address = address_to_native (socket.get_local_address ());
+			raw_local_address = address_to_native (local_addr);
 			uint8[] raw_remote_address = address_to_native (address);
 
 			var dcid = make_connection_id (NGTcp2.MIN_INITIAL_DCIDLEN);
@@ -2118,7 +2122,8 @@ namespace Frida.Fruity {
 
 				unowned uint8[] data = rx_buf[:n];
 
-				connection.read_packet (path, null, data, make_timestamp ());
+				var res = connection.read_packet (path, null, data, make_timestamp ());
+				printerr ("read_packet() => %d\n", res);
 			} catch (GLib.Error e) {
 				return Source.REMOVE;
 			} finally {
@@ -2145,6 +2150,12 @@ namespace Frida.Fruity {
 		private void do_process_pending_writes () {
 			var ts = make_timestamp ();
 
+			var local = NGTcp2.SocketAddressUnion ();
+			var remote = NGTcp2.SocketAddressUnion ();
+			var path = NGTcp2.Path () {
+				local = NGTcp2.Address () { addr = (uint8[]) &local },
+				remote = NGTcp2.Address () { addr = (uint8[]) &remote },
+			};
 			var pi = NGTcp2.PacketInfo ();
 			Gee.Iterator<Stream> stream_iter = streams.values.iterator ();
 			while (true) {
@@ -2153,7 +2164,7 @@ namespace Frida.Fruity {
 				Bytes? datagram = tx_datagrams.peek ();
 				if (datagram != null) {
 					int accepted = -1;
-					n = connection.write_datagram (null, null, tx_buf, &accepted, NGTcp2.WriteStreamFlags.MORE, 0,
+					n = connection.write_datagram (&path, &pi, tx_buf, &accepted, NGTcp2.WriteStreamFlags.MORE, 0,
 						datagram.get_data (), ts);
 					if (accepted > 0)
 						tx_datagrams.poll ();
@@ -2173,7 +2184,7 @@ namespace Frida.Fruity {
 					}
 
 					ssize_t datalen = 0;
-					n = connection.write_stream (null, &pi, tx_buf, &datalen, NGTcp2.WriteStreamFlags.MORE,
+					n = connection.write_stream (&path, &pi, tx_buf, &datalen, NGTcp2.WriteStreamFlags.MORE,
 						(stream != null) ? stream.id : -1, data, ts);
 					if (datalen > 0)
 						stream.tx_buf.remove_range (0, (uint) datalen);
@@ -2185,6 +2196,12 @@ namespace Frida.Fruity {
 					continue;
 				if (n < 0)
 					break;
+
+				InetSocketAddress local_addr = (InetSocketAddress) SocketAddress.from_native (path.local.addr, path.local.addr.length);
+				InetSocketAddress remote_addr = (InetSocketAddress) SocketAddress.from_native (path.remote.addr, path.remote.addr.length);
+				printerr ("Udp.send() from [%s]:%u, to [%s]:%u\n",
+					local_addr.get_address ().to_string (), local_addr.get_port (),
+					remote_addr.get_address ().to_string (), remote_addr.get_port ());
 
 				try {
 					Udp.send (tx_buf[:n], socket.datagram_based, io_cancellable);
