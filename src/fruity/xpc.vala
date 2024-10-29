@@ -1795,6 +1795,7 @@ namespace Frida.Fruity {
 		}
 
 		private Promise<bool> established = new Promise<bool> ();
+		private Promise<bool> cancelled = new Promise<bool> ();
 
 		private Stream? control_stream;
 		private InetAddress? _remote_address;
@@ -1881,7 +1882,7 @@ namespace Frida.Fruity {
 		}
 
 		public override void dispose () {
-			cancel ();
+			perform_teardown ();
 
 			base.dispose ();
 		}
@@ -1911,6 +1912,14 @@ namespace Frida.Fruity {
 
 			var callbacks = NGTcp2.Callbacks () {
 				get_new_connection_id = on_get_new_connection_id,
+				remove_connection_id = (conn, cid, user_data) => {
+					printerr ("on_remove_connection_id()\n");
+					return 0;
+				},
+				stream_reset = (conn, stream_id, final_size, app_error_code, user_data, stream_user_data) => {
+					printerr ("stream_reset\n");
+					return 0;
+				},
 				extend_max_local_streams_bidi = (conn, max_streams, user_data) => {
 					TunnelConnection * self = user_data;
 					return self->on_extend_max_local_streams_bidi (max_streams);
@@ -1946,6 +1955,7 @@ namespace Frida.Fruity {
 			settings.max_tx_udp_payload_size = MAX_UDP_PAYLOAD_SIZE;
 			settings.no_tx_udp_payload_size_shaping = true;
 			settings.handshake_timeout = 5ULL * NGTcp2.SECONDS;
+			settings.log_printf = (NGTcp2.Printf) on_log;
 
 			var transport_params = NGTcp2.TransportParams.make_default ();
 			transport_params.max_datagram_frame_size = MAX_QUIC_DATAGRAM_SIZE;
@@ -1967,6 +1977,10 @@ namespace Frida.Fruity {
 			yield established.future.wait_async (cancellable);
 
 			return true;
+		}
+
+		private static void on_log (void * user_data, string format, ...) {
+			printerr ("[NGTCP2] %s\n", format.vprintf (va_list ()));
 		}
 
 		private void on_control_stream_opened () {
@@ -2027,7 +2041,30 @@ namespace Frida.Fruity {
 			established.resolve (true);
 		}
 
-		public void cancel () {
+		public async void cancel (Cancellable? cancellable) throws IOError {
+			if (connection == null)
+				return;
+
+			if (streams.is_empty) {
+				perform_teardown ();
+				return;
+			}
+
+			foreach (int64 id in streams.keys)
+				connection.shutdown_stream (0, id, 0);
+			process_pending_writes ();
+
+			try {
+				yield cancelled.future.wait_async (cancellable);
+			} catch (Error e) {
+				assert_not_reached ();
+			}
+		}
+
+		private void perform_teardown () {
+			if (cancelled.future.ready)
+				return;
+
 			if (connection != null)
 				close ();
 			connection = null;
@@ -2052,6 +2089,8 @@ namespace Frida.Fruity {
 
 			if (_tunnel_netstack != null)
 				_tunnel_netstack.stop ();
+
+			cancelled.resolve (true);
 		}
 
 		private void send_request (string json) {
@@ -2124,7 +2163,9 @@ namespace Frida.Fruity {
 				unowned uint8[] data = rx_buf[:n];
 
 				var res = connection.read_packet (path, null, data, make_timestamp ());
-				if (res != 0)
+				if (res == NGTcp2.ErrorCode.DRAINING)
+					perform_teardown ();
+				else if (res != 0)
 					printerr ("\tread_packet() => %d\n", res);
 			} catch (GLib.Error e) {
 				return Source.REMOVE;
@@ -2240,7 +2281,7 @@ namespace Frida.Fruity {
 		private bool on_expiry () {
 			int res = connection.handle_expiry (make_timestamp ());
 			if (res != 0) {
-				cancel ();
+				perform_teardown ();
 				return Source.REMOVE;
 			}
 
@@ -2274,12 +2315,14 @@ namespace Frida.Fruity {
 		}
 
 		private int on_stream_close (uint32 flags, int64 stream_id, uint64 app_error_code) {
+			printerr ("on_stream_close()\n");
+
 			if (!established.future.ready) {
 				established.reject (new Error.TRANSPORT ("Connection closed early with QUIC app error code %" +
 					uint64.FORMAT_MODIFIER + "u", app_error_code));
 			}
 
-			cancel ();
+			perform_teardown ();
 
 			return 0;
 		}
@@ -3023,6 +3066,7 @@ namespace Frida.Fruity {
 		}
 
 		private int on_stream_close (int32 stream_id, uint32 error_code) {
+			printerr ("on_stream_close() stream_id=%d\n", stream_id);
 			io_cancellable.cancel ();
 			return 0;
 		}

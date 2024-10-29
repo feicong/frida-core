@@ -1628,7 +1628,7 @@ namespace Frida.Fruity {
 		public async void close (Cancellable? cancellable) throws IOError {
 			_discovery_service.close ();
 
-			tunnel_connection.cancel ();
+			yield tunnel_connection.cancel (cancellable);
 
 			if (ncm != null)
 				ncm.close ();
@@ -1809,7 +1809,7 @@ namespace Frida.Fruity {
 		public async void close (Cancellable? cancellable) throws IOError {
 			_discovery_service.close ();
 
-			tunnel_connection.cancel ();
+			yield tunnel_connection.cancel (cancellable);
 		}
 
 		public async IOStream open_tcp_connection (uint16 port, Cancellable? cancellable) throws Error, IOError {
